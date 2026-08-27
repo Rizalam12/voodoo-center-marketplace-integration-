@@ -1,0 +1,9 @@
+node_modules/
+.env
+data/
+npm-debug.log*
+.DS_Store
+data/catalog.raw
+data/catalog.etag
+data/catalog-products.jsonl
+data/catalog-stats.json

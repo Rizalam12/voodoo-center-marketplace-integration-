@@ -1,0 +1,14 @@
+require("dotenv").config();
+const fs=require("node:fs"),path=require("node:path");
+const DATA=path.join(process.cwd(),"data");
+const required=["VOODOO_API_KEY","CATALOG_URL","WEBHOOK_SECRET","TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","ADMIN_SECRET"];
+const missing=required.filter(k=>!process.env[k]?.trim());
+console.log("Voodoo Center Integration 2.0 setup");
+console.log("-----------------------------------");
+console.log(missing.length?`Missing .env values: ${missing.join(", ")}`:".env: OK");
+console.log(`Data directory: ${DATA}`);
+console.log(`Catalog downloaded: ${fs.existsSync(path.join(DATA,"catalog.lmdb"))?"yes":"no"}`);
+console.log(`Imported products: ${fs.existsSync(path.join(DATA,"catalog-products.jsonl"))?"yes":"no"}`);
+console.log(`Reseller catalog: ${fs.existsSync(path.join(DATA,"reseller-products.jsonl"))?"yes":"no"}`);
+console.log("Voodoo order creation: " + (process.env.ENABLE_VOODOO_ORDERS==="true"?"ENABLED":"DISABLED (safe test mode)"));
+if(missing.length) process.exitCode=1;

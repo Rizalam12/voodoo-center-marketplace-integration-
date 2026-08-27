@@ -1,0 +1,14 @@
+1. Unzip this folder.
+2. Open PowerShell inside the folder that contains package.json.
+3. Run: npm install
+4. Run: Copy-Item .env.example .env
+5. Edit .env and enter your existing values.
+6. Run: npm run setup
+7. Terminal 1: npm start
+8. Terminal 2: refresh the catalog using the command in README.md.
+9. Run: npm run catalog:import
+10. Run: npm run catalog:analyze
+11. Run: npm run reseller:build
+12. Run: npm run reseller:stats
+
+Do not set ENABLE_VOODOO_ORDERS=true during initial testing.

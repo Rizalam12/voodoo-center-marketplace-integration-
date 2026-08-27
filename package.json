@@ -1,0 +1,35 @@
+{
+  "name": "voodoo-center-integration",
+  "version": "2.0.0",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "catalog:inspect": "node src/catalog-cli.js inspect",
+    "catalog:search": "node src/catalog-cli.js search",
+    "catalog:import": "node --max-old-space-size=2048 src/catalog-cli.js import",
+    "catalog:stats": "node src/catalog-cli.js stats",
+    "catalog:analyze": "node src/catalog-cli.js analyze",
+    "reseller:build": "node src/catalog-cli.js build-reseller",
+    "reseller:stats": "node src/catalog-cli.js reseller-stats",
+    "reseller:search": "node src/catalog-cli.js reseller-search",
+    "ggsel:test": "node src/catalog-cli.js ggsel-test",
+    "ggsel:categories": "node src/catalog-cli.js ggsel-categories",
+    "ggsel:category-search": "node src/catalog-cli.js ggsel-category-search",
+    "ggsel:dry-run": "node src/catalog-cli.js ggsel-dry-run",
+    "ggsel:test-offer": "node src/catalog-cli.js ggsel-test-offer",
+    "ggsel:inspect-offer": "node src/catalog-cli.js ggsel-inspect-offer",
+    "ggsel:configure-webhook": "node src/catalog-cli.js ggsel-configure-webhook",
+    "ggsel:webhook-test": "node src/catalog-cli.js ggsel-webhook-test",
+    "ggsel:fulfillment-test": "node src/catalog-cli.js ggsel-fulfillment-test",
+    "setup": "node src/setup.js",
+    "catalog:all": "node src/catalog-cli.js all"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "fzstd": "^0.1.1"
+  }
+}
