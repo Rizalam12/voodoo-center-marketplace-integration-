@@ -58,12 +58,13 @@ const raw = (q) =>
 http
   .createServer(async (q, r) => {
     try {
+      const pathname = new URL(q.url, "http://localhost").pathname;
       if (q.method === "GET" && q.url === "/")
         return json(r, 200, {
           status: "ok",
           service: "Voodoo Center integration",
         });
-      if (q.method === "GET" && q.url === "/health")
+      if (q.method === "GET" && pathname === "/health")
         return json(r, 200, { ok: true, service: "voodoo-center-integration" });
       if (q.method === "GET" && q.url === "/api/account")
         return json(r, 200, { ok: true, account: await getAccount() });
