@@ -129,6 +129,7 @@ function buildResellerProduct(p) {
     reason,
     active: status !== "manual_review",
     in_stock: stock,
+    stock_quantity: typeof p.in_stock === "number" ? Math.max(0, Math.floor(p.in_stock)) : (p.in_stock === true ? 1 : 0),
     voodoo_price: validPrice ? price : null,
     currency: p.currency || "RUB",
     selling_price: validPrice ? p.reseller_price : null,

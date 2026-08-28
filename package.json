@@ -22,6 +22,7 @@
     "ggsel:configure-webhook": "node src/catalog-cli.js ggsel-configure-webhook",
     "ggsel:webhook-test": "node src/catalog-cli.js ggsel-webhook-test",
     "ggsel:fulfillment-test": "node src/catalog-cli.js ggsel-fulfillment-test",
+    "ggsel:sync-stock": "node src/catalog-cli.js ggsel:sync-stock",
     "setup": "node src/setup.js",
     "catalog:all": "node src/catalog-cli.js all"
   },

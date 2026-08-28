@@ -9,6 +9,7 @@ const {
   importProducts,
   searchImported,
   getStats,
+  buildResellerCatalog,
 } = require("./catalog");
 const { sendTelegramMessage, formatWebhook } = require("./telegram");
 const {
@@ -29,6 +30,7 @@ const {
   getOffer,
   patchOffer,
   buildWebhookNotificationSettings,
+  syncOfferStock,
 } = require("./ggsel");
 const { handleNotification, parseNotification } = require("./ggsel-orders");
 const PORT = Number(process.env.PORT || 3000);
@@ -70,9 +72,65 @@ http
         return json(r, 200, { ok: true, account: await getAccount() });
       if (q.method === "POST" && q.url === "/admin/catalog/refresh") {
         if (!auth(q)) return json(r, 403, { ok: false, error: "Forbidden" });
+
+        const download = await downloadCatalog();
+        const imported = await importProducts();
+        const reseller = await buildResellerCatalog();
+
+        const fs = require("node:fs");
+        const products = fs
+          .readFileSync("data/reseller-products.jsonl", "utf8")
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map(JSON.parse);
+
+        const { loadMap } = require("./ggsel-orders");
+        const map = loadMap();
+        const stock_sync = [];
+
+        for (const [offerId, mapping] of Object.entries(map)) {
+          const product = products.find(
+            p => Number(p.voodoo_id) === Number(mapping.voodoo_id)
+          );
+
+          if (!product) {
+            stock_sync.push({
+              offer_id: offerId,
+              voodoo_id: mapping.voodoo_id,
+              action: "skipped",
+              reason: "product_not_found",
+            });
+            continue;
+          }
+
+          if (typeof product.in_stock !== "boolean") {
+            stock_sync.push({
+              offer_id: offerId,
+              voodoo_id: mapping.voodoo_id,
+              action: "skipped",
+              reason: "unknown_stock",
+            });
+            continue;
+          }
+
+          const quantity = typeof product.stock_quantity === "number" ? Math.max(0, Math.floor(product.stock_quantity)) : (product.in_stock ? 1 : 0);
+          await syncOfferStock(offerId, quantity);
+
+          stock_sync.push({
+            offer_id: offerId,
+            voodoo_id: mapping.voodoo_id,
+            voodoo_in_stock: product.in_stock,
+            quantity,
+            action: "updated",
+          });
+        }
+
         return json(r, 200, {
           ok: true,
-          ...(await downloadCatalog()),
+          download,
+          imported,
+          reseller,
+          stock_sync,
           status: catalogStatus(),
         });
       }

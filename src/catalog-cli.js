@@ -23,8 +23,9 @@ const {
   getOffer,
   patchOffer,
   buildWebhookNotificationSettings,
+  syncOfferStock,
 } = require("./ggsel");
-const { parseNotification, handleNotification } = require("./ggsel-orders");
+const { parseNotification, handleNotification, loadMap } = require("./ggsel-orders");
 const { fulfillVoodooProduct } = require("./fulfillment/voodoo");
 const [c, ...a] = process.argv.slice(2);
 (async () => {
@@ -94,8 +95,60 @@ const [c, ...a] = process.argv.slice(2);
       try { notification = JSON.parse(raw); } catch { throw Error("Webhook test input must be valid JSON."); }
       if (!notification || typeof notification !== "object" || Array.isArray(notification)) throw Error("Webhook test input must be a JSON object.");
       console.log(JSON.stringify({ parsed: parseNotification(notification, Buffer.from(raw)), pipeline: await handleNotification(notification, Buffer.from(raw)) }, null, 2));
+    } else if (c === "ggsel:sync-stock" || c === "ggsel-sync-stock") {
+      const fs = require("node:fs");
+      const products = fs
+        .readFileSync("data/reseller-products.jsonl", "utf8")
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(JSON.parse);
+      const map = loadMap();
+      const results = [];
+
+      for (const [offerId, mapping] of Object.entries(map)) {
+        const product = products.find(
+          p => Number(p.voodoo_id) === Number(mapping.voodoo_id)
+        );
+
+        if (!product) {
+          results.push({
+            offer_id: offerId,
+            voodoo_id: mapping.voodoo_id,
+            action: "skipped",
+            reason: "product_not_found"
+          });
+          continue;
+        }
+
+        if (typeof product.in_stock !== "boolean") {
+          results.push({
+            offer_id: offerId,
+            voodoo_id: mapping.voodoo_id,
+            action: "skipped",
+            reason: "unknown_stock"
+          });
+          continue;
+        }
+
+        const quantity = typeof product.stock_quantity === "number" ? Math.max(0, Math.floor(product.stock_quantity)) : (product.in_stock ? 1 : 0);
+        const ggsel = await syncOfferStock(offerId, quantity);
+
+        results.push({
+          offer_id: offerId,
+          voodoo_id: mapping.voodoo_id,
+          voodoo_in_stock: product.in_stock,
+          quantity,
+          action: "updated",
+          ggsel
+        });
+      }
+
+      console.log(JSON.stringify(results, null, 2));
     } else if (c === "ggsel-fulfillment-test") {
-      console.log(JSON.stringify(await fulfillVoodooProduct({ internal_order_id: "local-test", voodoo_product_id: 695585, quantity: 1, required_fields: [] }), null, 2));
+      const map = loadMap();
+      const mapping = map["102794960"];
+      if (!mapping) throw Error("No mapping found for GGsel offer 102794960.");
+      console.log(JSON.stringify(await fulfillVoodooProduct({ internal_order_id: "local-test", voodoo_product_id: mapping.voodoo_id, quantity: 1, required_fields: [] }), null, 2));
     } else
       console.log(
         "Usage: npm run catalog:inspect | search -- <q> | import | stats",
