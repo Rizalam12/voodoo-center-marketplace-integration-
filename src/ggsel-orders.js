@@ -120,9 +120,10 @@ async function handleNotification(notification, raw) {
 }
 function configureMapping() {
   const map = loadMap();
-  map["102794960"] = { voodoo_id: 5132 };
+  map["102794960"] = { voodoo_id: 695585 };
   fs.mkdirSync(DATA, { recursive: true });
   fs.writeFileSync(MAP_FILE, JSON.stringify(map, null, 2) + "\n");
   return map;
 }
 module.exports = { parseNotification, handleNotification, configureMapping, loadMap, safeValue, eventId };
+
