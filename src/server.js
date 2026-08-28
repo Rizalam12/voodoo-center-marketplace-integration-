@@ -160,6 +160,47 @@ http
         if (!notification || typeof notification !== "object" || Array.isArray(notification)) return json(r, 400, { ok: false, error: "Invalid notification" });
         return json(r, 200, { ok: true, parsed: parseNotification(notification, b) });
       }
+      if (q.method === "POST" && pathname === "/webhooks/ggsel/post-payment-test") {
+        const b = await raw(q);
+        let body = null;
+        try { body = JSON.parse(b.toString("utf8")); } catch {}
+
+        const safeHeaders = Object.fromEntries(
+          Object.entries(q.headers).map(([key, value]) => [
+            key,
+            /authorization|api[_-]?key|token|secret|password/i.test(key)
+              ? "[REDACTED]"
+              : value
+          ])
+        );        const diagnostic = {
+          received_at: new Date().toISOString(),
+          method: q.method,
+          pathname: new URL(q.url, "http://localhost").pathname,
+          query: Object.fromEntries(new URL(q.url, "http://localhost").searchParams),
+          headers: safeHeaders,
+          body
+        };
+
+        console.log("[ggsel-post-payment-test]", JSON.stringify(diagnostic));
+
+        const diagnosticFile = require("node:path").join(
+          process.cwd(),
+          "data",
+          "ggsel-post-payment-events.jsonl"
+        );
+
+        require("node:fs").mkdirSync(
+          require("node:path").dirname(diagnosticFile),
+          { recursive: true }
+        );
+
+        require("node:fs").appendFileSync(
+          diagnosticFile,
+          JSON.stringify(diagnostic) + "\n"
+        );
+
+        return json(r, 200, { ok: true, received: true });
+      }
       if (q.method === "POST" && q.url === "/webhooks/ggsel") {
         const b = await raw(q);
         let notification;

@@ -8,14 +8,14 @@ const DATA = path.join(process.cwd(), "data");
 const EVENTS = path.join(DATA, "ggsel-events.jsonl");
 const ORDERS = path.join(DATA, "orders.jsonl");
 const MAP_FILE = path.join(DATA, "ggsel-product-map.json");
+const DEFAULT_MAP_FILE = path.join(__dirname, "ggsel-product-map.json");
 const RESELLER = path.join(DATA, "reseller-products.jsonl");
 
 function loadMap() {
-  try {
-    return JSON.parse(fs.readFileSync(MAP_FILE, "utf8"));
-  } catch {
-    return {};
+  for (const file of [MAP_FILE, DEFAULT_MAP_FILE]) {
+    try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
   }
+  return {};
 }
 function resellerProduct(voodooId) {
   if (!fs.existsSync(RESELLER)) return null;
@@ -126,4 +126,3 @@ function configureMapping() {
   return map;
 }
 module.exports = { parseNotification, handleNotification, configureMapping, loadMap, safeValue, eventId };
-

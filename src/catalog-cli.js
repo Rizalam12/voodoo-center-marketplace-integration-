@@ -81,7 +81,7 @@ const [c, ...a] = process.argv.slice(2);
     } else if (c === "ggsel-configure-webhook") {
       const id = a[0];
       if (!id) throw Error("Usage: npm run ggsel:configure-webhook -- 102794960 [--confirm]");
-      const payload = { notification_settings: buildWebhookNotificationSettings() };
+      const payload = { notification_settings: buildWebhookNotificationSettings(), post_payment_url: process.env.GGSEL_POST_PAYMENT_TEST_URL?.trim() || null };
       if (!a.includes("--confirm")) {
         console.log(JSON.stringify({ offer_id: id, would_patch: payload, confirmed: false }, null, 2));
       } else {
@@ -95,7 +95,7 @@ const [c, ...a] = process.argv.slice(2);
       if (!notification || typeof notification !== "object" || Array.isArray(notification)) throw Error("Webhook test input must be a JSON object.");
       console.log(JSON.stringify({ parsed: parseNotification(notification, Buffer.from(raw)), pipeline: await handleNotification(notification, Buffer.from(raw)) }, null, 2));
     } else if (c === "ggsel-fulfillment-test") {
-      console.log(JSON.stringify(await fulfillVoodooProduct({ internal_order_id: "local-test", voodoo_product_id: 5132, quantity: 1, required_fields: [] }), null, 2));
+      console.log(JSON.stringify(await fulfillVoodooProduct({ internal_order_id: "local-test", voodoo_product_id: 695585, quantity: 1, required_fields: [] }), null, 2));
     } else
       console.log(
         "Usage: npm run catalog:inspect | search -- <q> | import | stats",
