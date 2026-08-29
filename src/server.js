@@ -77,54 +77,6 @@ http
         const imported = await importProducts();
         const reseller = await buildResellerCatalog();
 
-        const fs = require("node:fs");
-        const products = fs
-          .readFileSync("data/reseller-products.jsonl", "utf8")
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .map(JSON.parse);
-
-        const { loadMap } = require("./ggsel-orders");
-        const map = loadMap();
-        const stock_sync = [];
-
-        for (const [offerId, mapping] of Object.entries(map)) {
-          const product = products.find(
-            p => Number(p.voodoo_id) === Number(mapping.voodoo_id)
-          );
-
-          if (!product) {
-            stock_sync.push({
-              offer_id: offerId,
-              voodoo_id: mapping.voodoo_id,
-              action: "skipped",
-              reason: "product_not_found",
-            });
-            continue;
-          }
-
-          if (typeof product.in_stock !== "boolean") {
-            stock_sync.push({
-              offer_id: offerId,
-              voodoo_id: mapping.voodoo_id,
-              action: "skipped",
-              reason: "unknown_stock",
-            });
-            continue;
-          }
-
-          const quantity = typeof product.stock_quantity === "number" ? Math.max(0, Math.floor(product.stock_quantity)) : (product.in_stock ? 1 : 0);
-          await syncOfferStock(offerId, quantity);
-
-          stock_sync.push({
-            offer_id: offerId,
-            voodoo_id: mapping.voodoo_id,
-            voodoo_in_stock: product.in_stock,
-            quantity,
-            action: "updated",
-          });
-        }
-
         return json(r, 200, {
           ok: true,
           download,
