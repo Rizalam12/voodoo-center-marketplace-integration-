@@ -296,7 +296,7 @@ http
       }
       return json(r, 404, { ok: false, error: "Not found" });
     } catch (e) {
-      console.error("[server]", e.message);
+      console.error("[server]", e?.stack || e?.message || e);
       return json(r, 500, { ok: false, error: "Request failed" });
     }
   })
