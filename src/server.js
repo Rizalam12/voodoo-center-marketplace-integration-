@@ -90,7 +90,6 @@ http
           download,
           imported,
           reseller,
-          stock_sync,
           status: catalogStatus(),
         });
       }
