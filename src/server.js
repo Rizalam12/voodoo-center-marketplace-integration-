@@ -73,9 +73,17 @@ http
       if (q.method === "POST" && q.url === "/admin/catalog/refresh") {
         if (!auth(q)) return json(r, 403, { ok: false, error: "Forbidden" });
 
+        console.log("[catalog] starting download");
         const download = await downloadCatalog();
+        console.log("[catalog] download complete", download);
+
+        console.log("[catalog] starting import");
         const imported = await importProducts();
+        console.log("[catalog] import complete", imported);
+
+        console.log("[catalog] starting reseller build");
         const reseller = await buildResellerCatalog();
+        console.log("[catalog] reseller build complete", reseller);
 
         return json(r, 200, {
           ok: true,
