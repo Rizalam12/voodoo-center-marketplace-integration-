@@ -44,30 +44,202 @@ async function downloadCatalog(){
 
 async function decompressCatalog(){
   ensure();
-  if(!fs.existsSync(ZST))throw Error("No downloaded catalog. Run catalog refresh first.");
+  if(!fs.existsSync(ZST))
+    throw Error("No downloaded catalog. Run catalog refresh first.");
 
-  const stat=fs.statSync(ZST);
-  const compressedBytes=stat.size;
+  const compressedBytes=fs.statSync(ZST).size;
+  const input=fs.createReadStream(ZST,{highWaterMark:1024*1024});
+  const output=fs.createWriteStream(RAW,{highWaterMark:1024*1024});
+
+  let first=Buffer.alloc(4);
+  let firstBytes=0;
+  let zstdDetected=false;
+  let rawBytes=0;
+  let decoder=null;
+
+  const writeChunk=data=>{
+    if(!data||!data.length)return;
+    const b=Buffer.from(data);
+    rawBytes+=b.length;
+    output.write(b);
+  };
+
+  try{
+    for await(const chunk of input){
+      const b=Buffer.from(chunk);
+
+      if(firstBytes<4){
+        const take=Math.min(4-firstBytes,b.length);
+        b.copy(first,firstBytes,0,take);
+        firstBytes+=take;
+
+        if(firstBytes===4){
+          zstdDetected=
+            first[0]===40 &&
+            first[1]===181 &&
+            first[2]===47 &&
+            first[3]===253;
+
+          if(zstdDetected)
+            decoder=new fzstd.Decompress(writeChunk);
+        }
+      }
+
+      if(decoder){
+        decoder.push(b,false);
+      }else if(firstBytes===4){
+        writeChunk(b);
+      }
+    }
+
+    if(decoder)
+      decoder.push(new Uint8Array(0),true);
+
+    await new Promise((resolve,reject)=>{
+      output.end(error=>error?reject(error):resolve());
+    });
+  }catch(error){
+    input.destroy();
+    output.destroy();
+    try{fs.unlinkSync(RAW);}catch{}
+    throw error;
+  }
+
+  return{
+    compressedBytes,
+    rawBytes:fs.statSync(RAW).size,
+    zstdDetected,
+    rawPath:RAW
+  };
+}
+function printableStrings(b,min=4,max=512){const o=[];let s=-1;const f=e=>{if(s<0)return;const v=b.subarray(s,e).toString("utf8").trim();if(v.length>=min&&v.length<=max&&/[A-Za-z0-9]/.test(v))o.push({offset:s,value:v});s=-1;};for(let i=0;i<b.length;i++){const c=b[i],ok=c>=32&&c<=126||c===9||c===10||c===13;if(ok){if(s<0)s=i;}else f(i);}f(b.length);return o;}
+function inspectCatalog(){const i=decompressCatalog(),r=fs.readFileSync(RAW);return{...i,first64Hex:r.subarray(0,64).toString("hex"),sampleStrings:printableStrings(r,6,160).slice(0,40)};}
+function searchCatalog(q,limit=50){if(!q?.trim())throw Error("Search query is required.");const i=decompressCatalog(),a=printableStrings(fs.readFileSync(RAW)),x=q.toLowerCase(),m=[],seen=new Set();for(const e of a){if(!e.value.toLowerCase().includes(x)||seen.has(e.value))continue;seen.add(e.value);m.push(e);if(m.length>=limit)break;}return{...i,query:q,matches:m};}
+function catalogStatus(){return{downloaded:fs.existsSync(ZST),rawAvailable:fs.existsSync(RAW),productsImported:fs.existsSync(PRODUCTS),statsAvailable:fs.existsSync(STATS),compressedPath:ZST,rawPath:RAW,productsPath:PRODUCTS,statsPath:STATS,etagSaved:fs.existsSync(ETAG)};}
+function resellerPrice(v){const n=Number(v);if(!Number.isFinite(n))return null;const pct=Number(process.env.MARKUP_PERCENT||20),min=Number(process.env.MIN_MARKUP_RUB||0);return Number((n+Math.max(n*pct/100,min)).toFixed(2));}
+function normalize(o){if(!o||typeof o!=="object"||Array.isArray(o))return null;const id=o.id??o.item_id??o.product_id,name=o.name??o.title??o.item_name,price=o.price??o.base_price??o.subscriber_price;if(id===undefined||name===undefined||(price===undefined&&o.fields===undefined&&o.in_stock===undefined&&o.min_quantity===undefined&&o.max_quantity===undefined))return null;return{voodoo_id:id,name:String(name),type:o.type??o.product_type??null,price:price===undefined?null:Number(price),reseller_price:resellerPrice(price),currency:o.currency??"RUB",in_stock:o.in_stock??o.stock??null,min_quantity:o.min_quantity??null,max_quantity:o.max_quantity??null,fields:Array.isArray(o.fields)?o.fields:[],options:Array.isArray(o.options)?o.options:[]};}
+function scan(file,onObject){return new Promise((resolve,reject)=>{const s=fs.createReadStream(file,{highWaterMark:1024*1024});let inStr=false,esc=false,depth=0,start=-1,pos=0,buf="",parsed=0,valid=0;const finish=()=>{if(start<0)return;const t=buf;buf="";start=-1;try{const o=JSON.parse(t);parsed++;if(onObject(o))valid++;}catch{}};s.on("data",c=>{const t=c.toString("utf8");for(let i=0;i<t.length;i++){const ch=t[i];if(start<0){if(ch==="{"){start=pos+i;depth=1;inStr=false;esc=false;buf="{";}continue;}buf+=ch;if(inStr){if(esc)esc=false;else if(ch==="\\")esc=true;else if(ch==='"')inStr=false;continue;}if(ch==='"'){inStr=true;continue;}if(ch==="{")depth++;else if(ch==="}"){depth--;if(depth===0)finish();else if(buf.length>2000000){buf="";start=-1;depth=0;}}}pos+=t.length;});s.on("end",()=>{if(start>=0)finish();resolve({parsed,valid});});s.on("error",reject);});}
+async function importProducts(){
+  ensure();
+
+  if(!fs.existsSync(ZST))
+    throw Error("No downloaded catalog. Run catalog refresh first.");
+
+  const out=fs.createWriteStream(PRODUCTS,{encoding:"utf8"});
+  const seen=new Set();
+
+  const stats={
+    scannedObjects:0,
+    productRecords:0,
+    duplicates:0,
+    types:{},
+    stock:{in_stock:0,out_of_stock:0,unknown:0},
+    importedAt:new Date().toISOString()
+  };
+
+  let inStr=false;
+  let esc=false;
+  let depth=0;
+  let start=-1;
+  let buf="";
+
+  const finishObject=()=>{
+    if(start<0)return;
+
+    const t=buf;
+    buf="";
+    start=-1;
+
+    try{
+      const o=JSON.parse(t);
+      stats.scannedObjects++;
+
+      const p=normalize(o);
+      if(!p)return;
+
+      const k=String(p.voodoo_id)+"|"+p.name;
+
+      if(seen.has(k)){
+        stats.duplicates++;
+        return;
+      }
+
+      seen.add(k);
+      out.write(JSON.stringify(p)+"\n");
+      stats.productRecords++;
+
+      const type=String(p.type||"unknown");
+      stats.types[type]=(stats.types[type]||0)+1;
+
+      if(
+        p.in_stock===true ||
+        (typeof p.in_stock==="number" && p.in_stock>0)
+      ){
+        stats.stock.in_stock++;
+      }else if(
+        p.in_stock===false ||
+        p.in_stock===0
+      ){
+        stats.stock.out_of_stock++;
+      }else{
+        stats.stock.unknown++;
+      }
+    }catch{}
+  };
+
+  const consumeText=text=>{
+    for(let i=0;i<text.length;i++){
+      const ch=text[i];
+
+      if(start<0){
+        if(ch==="{"){
+          start=0;
+          depth=1;
+          inStr=false;
+          esc=false;
+          buf="{";
+        }
+        continue;
+      }
+
+      buf+=ch;
+
+      if(inStr){
+        if(esc)esc=false;
+        else if(ch==="\\")esc=true;
+        else if(ch==='"')inStr=false;
+        continue;
+      }
+
+      if(ch==='"'){
+        inStr=true;
+        continue;
+      }
+
+      if(ch==="{"){
+        depth++;
+      }else if(ch==="}"){
+        depth--;
+
+        if(depth===0){
+          finishObject();
+        }else if(buf.length>2000000){
+          buf="";
+          start=-1;
+          depth=0;
+        }
+      }
+    }
+  };
 
   const first=Buffer.alloc(4);
   let firstBytes=0;
   let zstdDetected=false;
-  let rawBytes=0;
-
-  const output=fs.createWriteStream(RAW);
-
-  const write=async(chunk)=>{
-    if(!chunk||!chunk.length)return;
-    rawBytes+=chunk.length;
-    if(!output.write(Buffer.from(chunk)))
-      await new Promise(resolve=>output.once("drain",resolve));
-  };
+  let decoder=null;
 
   const input=fs.createReadStream(ZST,{highWaterMark:1024*1024});
 
   try{
-    let decoder=null;
-
     for await(const chunk of input){
       const b=Buffer.from(chunk);
 
@@ -84,12 +256,8 @@ async function decompressCatalog(){
             first[3]===253;
 
           if(zstdDetected){
-            decoder=new fzstd.Decompress((data)=>{
-              rawBytes+=data.length;
-              if(!output.write(Buffer.from(data))){
-                // Backpressure is handled by the file stream;
-                // fzstd itself remains bounded to decoder-sized chunks.
-              }
+            decoder=new fzstd.Decompress(data=>{
+              consumeText(Buffer.from(data).toString("utf8"));
             });
           }
         }
@@ -98,38 +266,35 @@ async function decompressCatalog(){
       if(decoder){
         decoder.push(b,false);
       }else if(firstBytes===4){
-        await write(b);
+        consumeText(b.toString("utf8"));
       }
     }
 
-    if(decoder){
+    if(decoder)
       decoder.push(new Uint8Array(0),true);
-    }
+
+    if(start>=0)
+      finishObject();
+
+    await new Promise((resolve,reject)=>{
+      out.end(error=>error?reject(error):resolve());
+    });
+
+    stats.scannedObjects=stats.scannedObjects;
+    stats.zstdDetected=zstdDetected;
+
+    fs.writeFileSync(
+      STATS,
+      JSON.stringify(stats,null,2)
+    );
+
+    return stats;
   }catch(error){
     input.destroy();
-    output.destroy();
+    out.destroy();
     throw error;
   }
-
-  await new Promise((resolve,reject)=>{
-    output.end(error=>error?reject(error):resolve());
-  });
-
-  return{
-    compressedBytes,
-    rawBytes:fs.statSync(RAW).size,
-    zstdDetected,
-    rawPath:RAW
-  };
 }
-function printableStrings(b,min=4,max=512){const o=[];let s=-1;const f=e=>{if(s<0)return;const v=b.subarray(s,e).toString("utf8").trim();if(v.length>=min&&v.length<=max&&/[A-Za-z0-9]/.test(v))o.push({offset:s,value:v});s=-1;};for(let i=0;i<b.length;i++){const c=b[i],ok=c>=32&&c<=126||c===9||c===10||c===13;if(ok){if(s<0)s=i;}else f(i);}f(b.length);return o;}
-function inspectCatalog(){const i=decompressCatalog(),r=fs.readFileSync(RAW);return{...i,first64Hex:r.subarray(0,64).toString("hex"),sampleStrings:printableStrings(r,6,160).slice(0,40)};}
-function searchCatalog(q,limit=50){if(!q?.trim())throw Error("Search query is required.");const i=decompressCatalog(),a=printableStrings(fs.readFileSync(RAW)),x=q.toLowerCase(),m=[],seen=new Set();for(const e of a){if(!e.value.toLowerCase().includes(x)||seen.has(e.value))continue;seen.add(e.value);m.push(e);if(m.length>=limit)break;}return{...i,query:q,matches:m};}
-function catalogStatus(){return{downloaded:fs.existsSync(ZST),rawAvailable:fs.existsSync(RAW),productsImported:fs.existsSync(PRODUCTS),statsAvailable:fs.existsSync(STATS),compressedPath:ZST,rawPath:RAW,productsPath:PRODUCTS,statsPath:STATS,etagSaved:fs.existsSync(ETAG)};}
-function resellerPrice(v){const n=Number(v);if(!Number.isFinite(n))return null;const pct=Number(process.env.MARKUP_PERCENT||20),min=Number(process.env.MIN_MARKUP_RUB||0);return Number((n+Math.max(n*pct/100,min)).toFixed(2));}
-function normalize(o){if(!o||typeof o!=="object"||Array.isArray(o))return null;const id=o.id??o.item_id??o.product_id,name=o.name??o.title??o.item_name,price=o.price??o.base_price??o.subscriber_price;if(id===undefined||name===undefined||(price===undefined&&o.fields===undefined&&o.in_stock===undefined&&o.min_quantity===undefined&&o.max_quantity===undefined))return null;return{voodoo_id:id,name:String(name),type:o.type??o.product_type??null,price:price===undefined?null:Number(price),reseller_price:resellerPrice(price),currency:o.currency??"RUB",in_stock:o.in_stock??o.stock??null,min_quantity:o.min_quantity??null,max_quantity:o.max_quantity??null,fields:Array.isArray(o.fields)?o.fields:[],options:Array.isArray(o.options)?o.options:[]};}
-function scan(file,onObject){return new Promise((resolve,reject)=>{const s=fs.createReadStream(file,{highWaterMark:1024*1024});let inStr=false,esc=false,depth=0,start=-1,pos=0,buf="",parsed=0,valid=0;const finish=()=>{if(start<0)return;const t=buf;buf="";start=-1;try{const o=JSON.parse(t);parsed++;if(onObject(o))valid++;}catch{}};s.on("data",c=>{const t=c.toString("utf8");for(let i=0;i<t.length;i++){const ch=t[i];if(start<0){if(ch==="{"){start=pos+i;depth=1;inStr=false;esc=false;buf="{";}continue;}buf+=ch;if(inStr){if(esc)esc=false;else if(ch==="\\")esc=true;else if(ch==='"')inStr=false;continue;}if(ch==='"'){inStr=true;continue;}if(ch==="{")depth++;else if(ch==="}"){depth--;if(depth===0)finish();else if(buf.length>2000000){buf="";start=-1;depth=0;}}}pos+=t.length;});s.on("end",()=>{if(start>=0)finish();resolve({parsed,valid});});s.on("error",reject);});}
-async function importProducts(){ensure();if(!fs.existsSync(RAW))await decompressCatalog();if(!fs.existsSync(RAW))throw Error("No raw catalog available.");const out=fs.createWriteStream(PRODUCTS,{encoding:"utf8"}),seen=new Set(),stats={scannedObjects:0,productRecords:0,duplicates:0,types:{},stock:{in_stock:0,out_of_stock:0,unknown:0},importedAt:new Date().toISOString()};const r=await scan(RAW,o=>{const p=normalize(o);if(!p)return false;const k=String(p.voodoo_id)+"|"+p.name;if(seen.has(k)){stats.duplicates++;return false;}seen.add(k);out.write(JSON.stringify(p)+"\n");stats.productRecords++;const t=String(p.type||"unknown");stats.types[t]=(stats.types[t]||0)+1;if(p.in_stock===true||(typeof p.in_stock==="number"&&p.in_stock>0))stats.stock.in_stock++;else if(p.in_stock===false||p.in_stock===0)stats.stock.out_of_stock++;else stats.stock.unknown++;return true;});await new Promise(r=>out.end(r));stats.scannedObjects=r.parsed;fs.writeFileSync(STATS,JSON.stringify(stats,null,2));return stats;}
 function readImportedProducts(){
   if(!fs.existsSync(PRODUCTS))throw Error("Imported catalog file not found: data/catalog-products.jsonl. Run npm run catalog:import first.");
   return fs.readFileSync(PRODUCTS,"utf8").split(/\r?\n/).reduce((products,line,index)=>{
