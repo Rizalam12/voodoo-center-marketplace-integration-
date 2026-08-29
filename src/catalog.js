@@ -1,8 +1,127 @@
 const fs=require("node:fs"),path=require("node:path"),fzstd=require("fzstd");
 const DATA=path.join(process.cwd(),"data"),ZST=path.join(DATA,"catalog.lmdb"),RAW=path.join(DATA,"catalog.raw"),ETAG=path.join(DATA,"catalog.etag"),PRODUCTS=path.join(DATA,"catalog-products.jsonl"),STATS=path.join(DATA,"catalog-stats.json");
 const ensure=()=>fs.mkdirSync(DATA,{recursive:true});
-async function downloadCatalog(){const url=process.env.CATALOG_URL?.trim();if(!url)throw Error("CATALOG_URL is missing.");ensure();const headers={};if(fs.existsSync(ETAG))headers["If-None-Match"]=fs.readFileSync(ETAG,"utf8").trim();const r=await fetch(url,{headers});if(r.status===304)return{updated:false,message:"Catalog is already up to date."};if(!r.ok)throw Error(`Catalog download failed (${r.status}).`);const b=Buffer.from(await r.arrayBuffer());fs.writeFileSync(ZST,b);const e=r.headers.get("etag");if(e)fs.writeFileSync(ETAG,e);return{updated:true,bytes:b.length,message:"Catalog snapshot downloaded."};}
-function decompressCatalog(){ensure();if(!fs.existsSync(ZST))throw Error("No downloaded catalog. Run catalog refresh first.");const c=fs.readFileSync(ZST),z=c.length>=4&&c[0]===40&&c[1]===181&&c[2]===47&&c[3]===253,r=z?Buffer.from(fzstd.decompress(c)):c;fs.writeFileSync(RAW,r);return{compressedBytes:c.length,rawBytes:r.length,zstdDetected:z,rawPath:RAW};}
+async function downloadCatalog(){
+  const url=process.env.CATALOG_URL?.trim();
+  if(!url)throw Error("CATALOG_URL is missing.");
+  ensure();
+
+  const headers={};
+  if(fs.existsSync(ETAG))headers["If-None-Match"]=fs.readFileSync(ETAG,"utf8").trim();
+
+  const r=await fetch(url,{headers});
+  if(r.status===304)return{updated:false,message:"Catalog is already up to date."};
+  if(!r.ok)throw Error(`Catalog download failed (${r.status}).`);
+  if(!r.body)throw Error("Catalog download returned no response body.");
+
+  const tmp=ZST+".tmp";
+  let bytes=0;
+  const out=fs.createWriteStream(tmp);
+
+  try{
+    for await(const chunk of r.body){
+      const b=Buffer.from(chunk);
+      bytes+=b.length;
+      if(!out.write(b))await new Promise(resolve=>out.once("drain",resolve));
+    }
+
+    await new Promise((resolve,reject)=>{
+      out.end(error=>error?reject(error):resolve());
+    });
+
+    fs.renameSync(tmp,ZST);
+  }catch(error){
+    out.destroy();
+    try{fs.unlinkSync(tmp);}catch{}
+    throw error;
+  }
+
+  const e=r.headers.get("etag");
+  if(e)fs.writeFileSync(ETAG,e);
+
+  return{updated:true,bytes,message:"Catalog snapshot downloaded."};
+}
+
+async function decompressCatalog(){
+  ensure();
+  if(!fs.existsSync(ZST))throw Error("No downloaded catalog. Run catalog refresh first.");
+
+  const stat=fs.statSync(ZST);
+  const compressedBytes=stat.size;
+
+  const first=Buffer.alloc(4);
+  let firstBytes=0;
+  let zstdDetected=false;
+  let rawBytes=0;
+
+  const output=fs.createWriteStream(RAW);
+
+  const write=async(chunk)=>{
+    if(!chunk||!chunk.length)return;
+    rawBytes+=chunk.length;
+    if(!output.write(Buffer.from(chunk)))
+      await new Promise(resolve=>output.once("drain",resolve));
+  };
+
+  const input=fs.createReadStream(ZST,{highWaterMark:1024*1024});
+
+  try{
+    let decoder=null;
+
+    for await(const chunk of input){
+      const b=Buffer.from(chunk);
+
+      if(firstBytes<4){
+        const take=Math.min(4-firstBytes,b.length);
+        b.copy(first,firstBytes,0,take);
+        firstBytes+=take;
+
+        if(firstBytes===4){
+          zstdDetected=
+            first[0]===40 &&
+            first[1]===181 &&
+            first[2]===47 &&
+            first[3]===253;
+
+          if(zstdDetected){
+            decoder=new fzstd.Decompress((data)=>{
+              rawBytes+=data.length;
+              if(!output.write(Buffer.from(data))){
+                // Backpressure is handled by the file stream;
+                // fzstd itself remains bounded to decoder-sized chunks.
+              }
+            });
+          }
+        }
+      }
+
+      if(decoder){
+        decoder.push(b,false);
+      }else if(firstBytes===4){
+        await write(b);
+      }
+    }
+
+    if(decoder){
+      decoder.push(new Uint8Array(0),true);
+    }
+  }catch(error){
+    input.destroy();
+    output.destroy();
+    throw error;
+  }
+
+  await new Promise((resolve,reject)=>{
+    output.end(error=>error?reject(error):resolve());
+  });
+
+  return{
+    compressedBytes,
+    rawBytes:fs.statSync(RAW).size,
+    zstdDetected,
+    rawPath:RAW
+  };
+}
 function printableStrings(b,min=4,max=512){const o=[];let s=-1;const f=e=>{if(s<0)return;const v=b.subarray(s,e).toString("utf8").trim();if(v.length>=min&&v.length<=max&&/[A-Za-z0-9]/.test(v))o.push({offset:s,value:v});s=-1;};for(let i=0;i<b.length;i++){const c=b[i],ok=c>=32&&c<=126||c===9||c===10||c===13;if(ok){if(s<0)s=i;}else f(i);}f(b.length);return o;}
 function inspectCatalog(){const i=decompressCatalog(),r=fs.readFileSync(RAW);return{...i,first64Hex:r.subarray(0,64).toString("hex"),sampleStrings:printableStrings(r,6,160).slice(0,40)};}
 function searchCatalog(q,limit=50){if(!q?.trim())throw Error("Search query is required.");const i=decompressCatalog(),a=printableStrings(fs.readFileSync(RAW)),x=q.toLowerCase(),m=[],seen=new Set();for(const e of a){if(!e.value.toLowerCase().includes(x)||seen.has(e.value))continue;seen.add(e.value);m.push(e);if(m.length>=limit)break;}return{...i,query:q,matches:m};}
