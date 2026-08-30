@@ -33,6 +33,10 @@ const {
   syncOfferStock,
 } = require("./ggsel");
 const { handleNotification, parseNotification } = require("./ggsel-orders");
+const {
+  startCatalogRefresh,
+  getStatus: getCatalogRefreshStatus,
+} = require("./catalog-refresh");
 const PORT = Number(process.env.PORT || 3000);
 const json = (r, c, b) => {
   const p = JSON.stringify(b);
@@ -71,31 +75,25 @@ http
       if (q.method === "GET" && q.url === "/api/account")
         return json(r, 200, { ok: true, account: await getAccount() });
       if (q.method === "POST" && q.url === "/admin/catalog/refresh") {
-        if (!auth(q)) return json(r, 403, { ok: false, error: "Forbidden" });
+        if (!auth(q))
+          return json(r, 403, { ok: false, error: "Forbidden" });
 
-        console.log("[catalog] starting download");
-        const download = await downloadCatalog();
-        console.log("[catalog] download complete", download);
+        const result = startCatalogRefresh();
 
-        console.log("[catalog] starting import");
-        const imported = await importProducts();
-        console.log("[catalog] import complete", imported);
+        return json(r, result.started ? 202 : 200, {
+          ok: true,
+          ...result,
+        });
+      }
 
-        console.log("[catalog] starting reseller build");
-        const reseller = await buildResellerCatalog();
-        console.log("[catalog] reseller build complete", reseller);
+      if (q.method === "GET" && q.url === "/admin/catalog/status") {
+        if (!auth(q))
+          return json(r, 403, { ok: false, error: "Forbidden" });
 
         return json(r, 200, {
           ok: true,
-          download,
-          imported,
-          reseller,
-          status: catalogStatus(),
+          ...getCatalogRefreshStatus(),
         });
-      }
-      if (q.method === "GET" && q.url === "/admin/catalog/status") {
-        if (!auth(q)) return json(r, 403, { ok: false, error: "Forbidden" });
-        return json(r, 200, { ok: true, status: catalogStatus() });
       }
       if (q.method === "GET" && q.url === "/admin/catalog/inspect") {
         if (!auth(q)) return json(r, 403, { ok: false, error: "Forbidden" });
