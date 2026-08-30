@@ -118,7 +118,116 @@ function searchCatalog(q,limit=50){if(!q?.trim())throw Error("Search query is re
 function catalogStatus(){return{downloaded:fs.existsSync(ZST),rawAvailable:fs.existsSync(RAW),productsImported:fs.existsSync(PRODUCTS),statsAvailable:fs.existsSync(STATS),compressedPath:ZST,rawPath:RAW,productsPath:PRODUCTS,statsPath:STATS,etagSaved:fs.existsSync(ETAG)};}
 function resellerPrice(v){const n=Number(v);if(!Number.isFinite(n))return null;const pct=Number(process.env.MARKUP_PERCENT||20),min=Number(process.env.MIN_MARKUP_RUB||0);return Number((n+Math.max(n*pct/100,min)).toFixed(2));}
 function normalize(o){if(!o||typeof o!=="object"||Array.isArray(o))return null;const id=o.id??o.item_id??o.product_id,name=o.name??o.title??o.item_name,price=o.price??o.base_price??o.subscriber_price;if(id===undefined||name===undefined||(price===undefined&&o.fields===undefined&&o.in_stock===undefined&&o.min_quantity===undefined&&o.max_quantity===undefined))return null;return{voodoo_id:id,name:String(name),type:o.type??o.product_type??null,price:price===undefined?null:Number(price),reseller_price:resellerPrice(price),currency:o.currency??"RUB",in_stock:o.in_stock??o.stock??null,min_quantity:o.min_quantity??null,max_quantity:o.max_quantity??null,fields:Array.isArray(o.fields)?o.fields:[],options:Array.isArray(o.options)?o.options:[]};}
-function scan(file,onObject){return new Promise((resolve,reject)=>{const s=fs.createReadStream(file,{highWaterMark:1024*1024});let inStr=false,esc=false,depth=0,start=-1,pos=0,buf="",parsed=0,valid=0;const finish=()=>{if(start<0)return;const t=buf;buf="";start=-1;try{const o=JSON.parse(t);parsed++;if(onObject(o))valid++;}catch{}};s.on("data",c=>{const t=c.toString("utf8");for(let i=0;i<t.length;i++){const ch=t[i];if(start<0){if(ch==="{"){start=pos+i;depth=1;inStr=false;esc=false;buf="{";}continue;}buf+=ch;if(inStr){if(esc)esc=false;else if(ch==="\\")esc=true;else if(ch==='"')inStr=false;continue;}if(ch==='"'){inStr=true;continue;}if(ch==="{")depth++;else if(ch==="}"){depth--;if(depth===0)finish();else if(buf.length>2000000){buf="";start=-1;depth=0;}}}pos+=t.length;});s.on("end",()=>{if(start>=0)finish();resolve({parsed,valid});});s.on("error",reject);});}
+function scan(file,onObject){
+  return new Promise((resolve,reject)=>{
+    const s=fs.createReadStream(file,{highWaterMark:1024*1024});
+    let inStr=false,esc=false,depth=0,start=-1,pos=0,buf="",parsed=0,valid=0;
+    let bytesRead=0;
+    let nextLog=5000;
+
+    const finish=()=>{
+      if(start<0)return;
+      const t=buf;
+      buf="";
+      start=-1;
+
+      try{
+        const o=JSON.parse(t);
+        parsed++;
+
+        if(onObject(o))valid++;
+
+        if(parsed>=nextLog){
+          console.log(
+            `[catalog-import] parsed=${parsed} valid=${valid} bytes=${bytesRead}`
+          );
+          nextLog+=5000;
+        }
+      }catch(error){
+        console.error(
+          `[catalog-import] JSON parse error at byte ${pos}:`,
+          error.message
+        );
+      }
+    };
+
+    s.on("data",c=>{
+      bytesRead+=c.length;
+
+      const t=c.toString("utf8");
+
+      for(let i=0;i<t.length;i++){
+        const ch=t[i];
+
+        if(start<0){
+          if(ch==="{"){
+            start=pos+i;
+            depth=1;
+            inStr=false;
+            esc=false;
+            buf="{";
+          }
+          continue;
+        }
+
+        buf+=ch;
+
+        if(inStr){
+          if(esc)esc=false;
+          else if(ch==="\\")esc=true;
+          else if(ch==='"')inStr=false;
+          continue;
+        }
+
+        if(ch==='"'){
+          inStr=true;
+          continue;
+        }
+
+        if(ch==="{"){
+          depth++;
+        }else if(ch==="}"){
+          depth--;
+
+          if(depth===0){
+            finish();
+          }else if(buf.length>2000000){
+            console.error(
+              `[catalog-import] object exceeded 2MB at byte ${pos+i}; resetting parser`
+            );
+            buf="";
+            start=-1;
+            depth=0;
+          }
+        }
+      }
+
+      pos+=t.length;
+
+      if(bytesRead>=1024*1024*50){
+        console.log(
+          `[catalog-import] read ${(bytesRead/1024/1024).toFixed(0)} MB`
+        );
+        bytesRead=0;
+      }
+    });
+
+    s.on("end",()=>{
+      if(start>=0)finish();
+
+      console.log(
+        `[catalog-import] scan complete parsed=${parsed} valid=${valid}`
+      );
+
+      resolve({parsed,valid});
+    });
+
+    s.on("error",error=>{
+      console.error("[catalog-import] stream error:",error.stack||error);
+      reject(error);
+    });
+  });
+}
 async function importProducts(){
   ensure();
 
