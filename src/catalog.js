@@ -49,6 +49,7 @@ async function decompressCatalog(){
 
   const compressedBytes=fs.statSync(ZST).size;
   const input=fs.createReadStream(ZST,{highWaterMark:1024*1024});
+
   const output=fs.createWriteStream(RAW,{highWaterMark:1024*1024});
 
   let first=Buffer.alloc(4);
@@ -229,12 +230,17 @@ function scan(file,onObject){
   });
 }
 async function importProducts(){
+  console.log("[catalog-import] importProducts entered");
   ensure();
 
   if(!fs.existsSync(ZST))
     throw Error("No downloaded catalog. Run catalog refresh first.");
 
+  console.log("[catalog-import] RAW ready", fs.existsSync(RAW), fs.existsSync(RAW) ? fs.statSync(RAW).size : 0);
+
   const out=fs.createWriteStream(PRODUCTS,{encoding:"utf8"});
+  console.log("[catalog-import] output stream created");
+
   const seen=new Set();
 
   const stats={
@@ -347,6 +353,8 @@ async function importProducts(){
   let decoder=null;
 
   const input=fs.createReadStream(ZST,{highWaterMark:1024*1024});
+
+  console.log("[catalog-import] starting compressed catalog read");
 
   try{
     for await(const chunk of input){
